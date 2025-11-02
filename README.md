@@ -8,13 +8,13 @@
 ### Prerequisites
 
 - **Operating System:** Linux (tested on Kali Linux, Ubuntu)
-- **Python:** 3.6 or higher
+- **Python:** 3.13 or higher
 - **Privileges:** Root/sudo access required for Masscan and Nmap
 
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/reconpipe.git
+git clone https://github.com/jdants/reconpipe.git
 cd reconpipe
 ```
 
