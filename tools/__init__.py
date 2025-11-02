@@ -7,6 +7,8 @@ from .nmap_wrapper import run_nmap
 from .harvester_wrapper import run_harvester
 from .aggregate import aggregate_results
 from .cve_lookup import lookup_cves_for_inventory, export_vulnerability_report
+from .eyewitness_wrapper import run_eyewitness
+from .report_generator import generate_markdown_report
 
 __all__ = [
     'run_masscan', 
@@ -14,6 +16,7 @@ __all__ = [
     'run_harvester', 
     'aggregate_results',
     'lookup_cves_for_inventory',
-    'export_vulnerability_report'
+    'export_vulnerability_report',
+    'run_eyewitness',
+    'generate_markdown_report'
 ]
-

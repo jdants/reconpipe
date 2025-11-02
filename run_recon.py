@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Reconnaissance Orchestration Pipeline
-Automates: Masscan → Nmap → theHarvester → Aggregation
+Automates: Masscan → Nmap → theHarvester → EyeWitness → CVE Lookup → Report Generation
 """
 
 import os
@@ -19,6 +19,8 @@ from tools.nmap_wrapper import run_nmap
 from tools.harvester_wrapper import run_harvester
 from tools.aggregate import aggregate_results
 from tools.cve_lookup import lookup_cves_for_inventory, export_vulnerability_report, set_nvd_api_key
+from tools.eyewitness_wrapper import run_eyewitness
+from tools.report_generator import generate_markdown_report
 
 # Setup logging
 logging.basicConfig(
@@ -64,16 +66,19 @@ class SudoManager:
 class ReconPipeline:
     """Main orchestration class for the reconnaissance pipeline"""
     def __init__(self, targets_file, output_dir='out', skip_masscan=False,
-                 skip_nmap=False, skip_harvester=False, no_sudo=False,
-                 cve_lookup=False, nvd_api_key=None, cve_max_age=365):
+                 skip_nmap=False, skip_harvester=False, skip_eyewitness=False,
+                 no_sudo=False, cve_lookup=False, nvd_api_key=None, 
+                 cve_max_age=365, generate_report=True):
         self.targets_file = targets_file
         self.output_dir = Path(output_dir)
         self.skip_masscan = skip_masscan
         self.skip_nmap = skip_nmap
         self.skip_harvester = skip_harvester
+        self.skip_eyewitness = skip_eyewitness
         self.no_sudo = no_sudo
         self.cve_lookup = cve_lookup
         self.cve_max_age = cve_max_age
+        self.generate_report = generate_report
 
         # Configure NVD API key if provided
         if nvd_api_key:
@@ -99,6 +104,7 @@ class ReconPipeline:
         self.masscan_results = []
         self.nmap_results = []
         self.harvester_results = []
+        self.inventory = None
 
     def setup_directories(self):
         """Create necessary output directories"""
@@ -166,7 +172,7 @@ class ReconPipeline:
             self.skip_masscan = True
         if not self.skip_masscan:
             logger.info("\n" + "=" * 80)
-            logger.info("[Phase 1/3] MASSCAN - Fast Host Discovery")
+            logger.info("[Phase 1/4] MASSCAN - Fast Host Discovery")
             logger.info("=" * 80)
             try:
                 self.masscan_results = run_masscan(
@@ -177,7 +183,7 @@ class ReconPipeline:
             except Exception as e:
                 logger.error(f"Masscan phase failed: {e}")
         else:
-            logger.info("\n[Phase 1/3] Skipping Masscan")
+            logger.info("\n[Phase 1/4] Skipping Masscan")
             masscan_file = self.output_dir / 'masscan.json'
             if masscan_file.exists():
                 try:
@@ -190,7 +196,7 @@ class ReconPipeline:
         # Phase 2: Nmap - Detailed scanning
         if not self.skip_nmap:
             logger.info("\n" + "=" * 80)
-            logger.info("[Phase 2/3] NMAP - Detailed Service Detection")
+            logger.info("[Phase 2/4] NMAP - Detailed Service Detection")
             logger.info("=" * 80)
     
             try:
@@ -224,7 +230,7 @@ class ReconPipeline:
         # Phase 3: theHarvester
         if not self.skip_harvester:
             logger.info("\n" + "=" * 80)
-            logger.info("[Phase 3/3] THEHARVESTER - OSINT Collection")
+            logger.info("[Phase 3/4] THEHARVESTER - OSINT Collection")
             logger.info("=" * 80)
             try:
                 domains = [t for t in self.targets if '.' in t and any(c.isalpha() for c in t)]
@@ -240,14 +246,14 @@ class ReconPipeline:
             except Exception as e:
                 logger.error(f"theHarvester phase failed: {e}")
         else:
-            logger.info("\n[Phase 3/3] Skipping theHarvester")
+            logger.info("\n[Phase 3/4] Skipping theHarvester")
 
         # Aggregation
         logger.info("\n" + "=" * 80)
-        logger.info("[Aggregation] Combining Results")
+        logger.info("[Phase 4/4] AGGREGATION - Combining Results")
         logger.info("=" * 80)
         try:
-            inventory = aggregate_results(
+            self.inventory = aggregate_results(
                 masscan_data=self.masscan_results,
                 nmap_data=self.nmap_results,
                 harvester_data=self.harvester_results,
@@ -255,25 +261,59 @@ class ReconPipeline:
             )
         except Exception as e:
             logger.error(f"Aggregation phase failed: {e}")
-            inventory = None
+            self.inventory = None
+
+        # EyeWitness (optional)
+        if not self.skip_eyewitness and self.inventory:
+            logger.info("\n" + "=" * 80)
+            logger.info("[EyeWitness] Web Service Screenshots")
+            logger.info("=" * 80)
+            try:
+                self.inventory = run_eyewitness(
+                    self.inventory,
+                    output_dir=str(self.output_dir)
+                )
+                # Save updated inventory
+                json_output = self.output_dir / 'inventory.json'
+                with open(json_output, 'w', encoding='utf-8') as f:
+                    json.dump(self.inventory, f, indent=2, ensure_ascii=False)
+                logger.info(f"✓ Updated inventory.json with screenshot data")
+            except Exception as e:
+                logger.error(f"EyeWitness phase failed: {e}")
 
         # CVE lookup (optional)
-        if self.cve_lookup and inventory:
+        if self.cve_lookup and self.inventory:
             logger.info("\n" + "=" * 80)
             logger.info("[CVE Lookup] Vulnerability Assessment")
             logger.info("=" * 80)
             try:
-                inventory = lookup_cves_for_inventory(inventory, max_age_days=self.cve_max_age)
+                self.inventory = lookup_cves_for_inventory(self.inventory, max_age_days=self.cve_max_age)
                 json_output = self.output_dir / 'inventory.json'
                 with open(json_output, 'w', encoding='utf-8') as f:
-                    json.dump(inventory, f, indent=2, ensure_ascii=False)
+                    json.dump(self.inventory, f, indent=2, ensure_ascii=False)
                 logger.info(f"✓ Updated inventory.json with CVE data")
                 vuln_report = self.output_dir / 'vulnerability_report.txt'
-                export_vulnerability_report(inventory, str(vuln_report))
+                export_vulnerability_report(self.inventory, str(vuln_report))
             except Exception as e:
                 logger.error(f"CVE lookup phase failed: {e}")
         elif self.cve_lookup:
             logger.warning("Skipping CVE lookup - no inventory data available")
+
+        # Generate comprehensive Markdown report
+        if self.generate_report and self.inventory:
+            logger.info("\n" + "=" * 80)
+            logger.info("[Report Generation] Creating Markdown Report")
+            logger.info("=" * 80)
+            try:
+                report_path = generate_markdown_report(
+                    self.inventory,
+                    output_dir=str(self.output_dir)
+                )
+                logger.info(f"✓ Generated comprehensive report: {report_path}")
+            except Exception as e:
+                logger.error(f"Report generation failed: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
 
         # Summary
         end_time = datetime.now()
@@ -284,17 +324,33 @@ class ReconPipeline:
         logger.info("=" * 80)
         logger.info(f"Duration: {duration}")
         logger.info(f"Results location: {self.output_dir.absolute()}")
+        logger.info("\nGenerated files:")
+        logger.info("  • inventory.json - Complete structured data")
+        logger.info("  • inventory.csv - Spreadsheet format")
+        logger.info("  • summary_report.txt - Text summary")
+        if self.generate_report:
+            logger.info("  • report.md - Comprehensive Markdown report with analysis")
+        if self.cve_lookup:
+            logger.info("  • vulnerability_report.txt - Detailed vulnerability assessment")
+        if not self.skip_eyewitness:
+            logger.info("  • eyewitness/ - Web service screenshots")
         logger.info("=" * 80)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Reconnaissance Pipeline Orchestrator',
+        description='Reconnaissance Pipeline Orchestrator with EyeWitness Integration',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  sudo python run_recon.py targets.txt    # run with sudo (recommended)
-  python run_recon.py targets.txt --no-sudo   # run without sudo (limited)
+  # Full scan with all features
+  sudo python run_recon.py targets.txt --cve-lookup --nvd-api-key YOUR_KEY
+  
+  # Quick scan without screenshots
+  sudo python run_recon.py targets.txt --skip-eyewitness
+  
+  # OSINT only (no scanning)
+  python run_recon.py targets.txt --skip-masscan --skip-nmap --no-sudo
 """
     )
 
@@ -303,7 +359,9 @@ Examples:
     parser.add_argument('--skip-masscan', action='store_true', help='Skip Masscan phase')
     parser.add_argument('--skip-nmap', action='store_true', help='Skip Nmap phase')
     parser.add_argument('--skip-harvester', action='store_true', help='Skip theHarvester phase')
+    parser.add_argument('--skip-eyewitness', action='store_true', help='Skip EyeWitness phase')
     parser.add_argument('--no-sudo', action='store_true', help='Run without sudo (limited functionality)')
+    parser.add_argument('--no-report', action='store_true', help='Skip Markdown report generation')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
 
     cve_group = parser.add_argument_group('CVE Lookup Options')
@@ -328,10 +386,12 @@ Examples:
         skip_masscan=args.skip_masscan,
         skip_nmap=args.skip_nmap,
         skip_harvester=args.skip_harvester,
+        skip_eyewitness=args.skip_eyewitness,
         no_sudo=args.no_sudo,
         cve_lookup=args.cve_lookup,
         nvd_api_key=args.nvd_api_key,
-        cve_max_age=args.cve_max_age
+        cve_max_age=args.cve_max_age,
+        generate_report=not args.no_report
     )
 
     try:
@@ -346,4 +406,3 @@ Examples:
 
 if __name__ == '__main__':
     main()
-
