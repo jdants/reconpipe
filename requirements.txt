@@ -1,0 +1,6 @@
+# Python Requirements for Reconnaissance Pipeline
+# Install with: pip3 install -r requirements.txt
+
+# Core dependencies
+xmltodict>=0.13.0      # Parse Nmap XML output
+requests>=2.28.0       # HTTP requests for CVE lookup API

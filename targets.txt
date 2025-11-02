@@ -1,0 +1,12 @@
+# Reconnaissance Targets - ONE PER LINE
+
+# Example IP addresses
+#192.168.1.1
+10.0.3.0/24
+
+# Example domains
+#example.com
+hackthissite.org
+
+# Comments start with #
+# Blank lines are ignored
